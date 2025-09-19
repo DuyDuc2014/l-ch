@@ -108,9 +108,12 @@ const getDatesInMonth = (year: number, month: number): Date[] => {
     return dates;
 };
 
-// Helper to format date to 'YYYY-MM-DD'
+// Helper to format date to 'YYYY-MM-DD' without timezone issues
 const formatDate = (date: Date): string => {
-    return date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 const App: React.FC = () => {
@@ -167,8 +170,10 @@ const App: React.FC = () => {
         }
 
         const generateSchedule = () => {
-            const globalStartDate = new Date(scheduleStartDate);
-            globalStartDate.setHours(0, 0, 0, 0);
+            // FIX: Parse date string as local time to avoid timezone issues.
+            // new Date('YYYY-MM-DD') can be interpreted as UTC midnight, causing off-by-one errors.
+            const [startYear, startMonth, startDay] = scheduleStartDate.split('-').map(Number);
+            const globalStartDate = new Date(startYear, startMonth - 1, startDay);
 
             const teacherIndexMap = new Map<string, number>();
             teachers.forEach((t, i) => teacherIndexMap.set(t.id, i));
@@ -193,6 +198,7 @@ const App: React.FC = () => {
                 if (manualOverrideId) {
                     if (manualOverrideId === '__EMPTY__') {
                         assignedTeacherId = null;
+                        teacherCycleIndex++; // Consume a cycle turn for empty slots
                     } else if (teacherIndexMap.has(manualOverrideId)) {
                         assignedTeacherId = manualOverrideId;
                         teacherCycleIndex = (teacherIndexMap.get(assignedTeacherId) ?? -1) + 1;
@@ -314,33 +320,64 @@ const App: React.FC = () => {
     }, []);
 
     const handleExportToCSV = () => {
-        const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
-        const headers = ['Ngày', 'Thứ', 'Giáo viên trực'];
+        const month = currentDate.getMonth();
+        const year = currentDate.getFullYear();
         
+        const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
         const teacherMap = new Map(teachers.map(t => [t.id, t.name]));
 
-        const rows = shifts.map(shift => {
-            const parts = shift.date.split('-').map(p => parseInt(p, 10));
-            const date = new Date(parts[0], parts[1] - 1, parts[2]);
+        const [startYear, startMonth, startDay] = scheduleStartDate.split('-').map(Number);
+        const globalStartDate = new Date(startYear, startMonth - 1, startDay);
+        
+        // Header for the CSV file
+        const csvHeader = ['Ngày', 'Thứ', 'Giáo viên trực'];
 
-            const formattedDate = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()}`;
-            const dayOfWeek = dayNames[date.getDay()];
-            const teacherName = shift.teacherId ? teacherMap.get(shift.teacherId) || 'Không rõ' : 'Trống';
-            
-            const escapedTeacherName = `"${teacherName.replace(/"/g, '""')}"`;
+        // Generate data rows
+        const dataRows = shifts
+            .map(shift => {
+                // Create a Date object for comparison. Note: month is 0-indexed in JS Date.
+                const [y, m, d] = shift.date.split('-').map(Number);
+                return { dateObj: new Date(y, m - 1, d), shift };
+            })
+            .filter(({ dateObj }) => {
+                // Filter out any dates before the official schedule start date
+                return dateObj >= globalStartDate;
+            })
+            .map(({ dateObj, shift }) => {
+                // Format the data for each row
+                const day = String(dateObj.getDate()).padStart(2, '0');
+                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                const year = dateObj.getFullYear();
+                
+                const formattedDate = `${day}/${month}/${year}`;
+                const dayOfWeek = dayNames[dateObj.getDay()];
+                const teacherName = shift.teacherId ? teacherMap.get(shift.teacherId) || 'Không rõ' : 'Trống';
+                
+                return [formattedDate, dayOfWeek, teacherName];
+            });
 
-            return [formattedDate, dayOfWeek, escapedTeacherName].join(',');
-        });
+        // Combine header and data rows
+        const allRows = [csvHeader, ...dataRows];
 
-        const csvContent = "\uFEFF" + [headers.join(','), ...rows].join('\n');
+        // Convert array of arrays to a CSV string, handling special characters
+        const csvContent = "\uFEFF" + allRows.map(row => 
+            row.map(cell => {
+                let cellStr = String(cell).replace(/"/g, '""'); // Escape double quotes
+                // Add quotes if the cell contains a comma, newline, or double quote
+                if (cellStr.search(/("|,|\n)/g) >= 0) {
+                    cellStr = `"${cellStr}"`;
+                }
+                return cellStr;
+            }).join(',')
+        ).join('\n');
+
+        // Create and trigger download
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
-            const month = currentDate.getMonth() + 1;
-            const year = currentDate.getFullYear();
             link.setAttribute('href', url);
-            link.setAttribute('download', `Lich_truc_Thang_${month}_${year}.csv`);
+            link.setAttribute('download', `Lich_truc_Thang_${month + 1}_${year}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();

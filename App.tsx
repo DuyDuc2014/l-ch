@@ -108,9 +108,12 @@ const getDatesInMonth = (year: number, month: number): Date[] => {
     return dates;
 };
 
-// Helper to format date to 'YYYY-MM-DD'
+// Helper to format date to 'YYYY-MM-DD' without timezone issues
 const formatDate = (date: Date): string => {
-    return date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 const App: React.FC = () => {
@@ -167,8 +170,10 @@ const App: React.FC = () => {
         }
 
         const generateSchedule = () => {
-            const globalStartDate = new Date(scheduleStartDate);
-            globalStartDate.setHours(0, 0, 0, 0);
+            // FIX: Parse date string as local time to avoid timezone issues.
+            // new Date('YYYY-MM-DD') can be interpreted as UTC midnight, causing off-by-one errors.
+            const [startYear, startMonth, startDay] = scheduleStartDate.split('-').map(Number);
+            const globalStartDate = new Date(startYear, startMonth - 1, startDay);
 
             const teacherIndexMap = new Map<string, number>();
             teachers.forEach((t, i) => teacherIndexMap.set(t.id, i));
@@ -314,33 +319,60 @@ const App: React.FC = () => {
     }, []);
 
     const handleExportToCSV = () => {
+        const month = currentDate.getMonth();
+        const year = currentDate.getFullYear();
+        const monthName = `Lịch trực Tháng ${month + 1}, ${year}`;
         const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
-        const headers = ['Ngày', 'Thứ', 'Giáo viên trực'];
         
         const teacherMap = new Map(teachers.map(t => [t.id, t.name]));
-
-        const rows = shifts.map(shift => {
-            const parts = shift.date.split('-').map(p => parseInt(p, 10));
-            const date = new Date(parts[0], parts[1] - 1, parts[2]);
-
-            const formattedDate = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()}`;
-            const dayOfWeek = dayNames[date.getDay()];
-            const teacherName = shift.teacherId ? teacherMap.get(shift.teacherId) || 'Không rõ' : 'Trống';
+    
+        const firstDayOfMonth = new Date(year, month, 1).getDay();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+        const calendarCells: string[] = [];
+    
+        // 1. Add empty cells for days before the 1st of the month
+        for (let i = 0; i < firstDayOfMonth; i++) {
+            calendarCells.push('');
+        }
+    
+        // 2. Add cells for each day of the month
+        for (let day = 1; day <= daysInMonth; day++) {
+            const date = new Date(year, month, day);
+            const dateString = formatDate(date);
             
-            const escapedTeacherName = `"${teacherName.replace(/"/g, '""')}"`;
-
-            return [formattedDate, dayOfWeek, escapedTeacherName].join(',');
-        });
-
-        const csvContent = "\uFEFF" + [headers.join(','), ...rows].join('\n');
+            const shift = shifts.find(s => s.date === dateString);
+            const teacherName = shift?.teacherId ? teacherMap.get(shift.teacherId) || 'Không rõ' : 'Trống';
+            
+            const cellContent = `${day} - ${teacherName}`;
+            calendarCells.push(`"${cellContent.replace(/"/g, '""')}"`);
+        }
+    
+        // 3. Create grid rows from the flat cell array
+        const gridRows: string[] = [];
+        for (let i = 0; i < calendarCells.length; i += 7) {
+            // Take a slice of 7 days for the week
+            const week = calendarCells.slice(i, i + 7);
+            // Pad the last week if it's not full
+            while (week.length < 7) {
+                week.push('');
+            }
+            gridRows.push(week.join(','));
+        }
+        
+        const csvRows = [
+            `"${monthName}"`,
+            dayNames.join(','),
+            ...gridRows
+        ];
+    
+        const csvContent = "\uFEFF" + csvRows.join('\n');
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
-            const month = currentDate.getMonth() + 1;
-            const year = currentDate.getFullYear();
             link.setAttribute('href', url);
-            link.setAttribute('download', `Lich_truc_Thang_${month}_${year}.csv`);
+            link.setAttribute('download', `Lich_truc_Thang_${month + 1}_${year}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
