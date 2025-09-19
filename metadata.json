@@ -1,0 +1,5 @@
+{
+  "name": "Teacher Duty Roster",
+  "description": "An automated teacher duty scheduling application. It assigns duties sequentially from a teacher list, displays them on a calendar, and automatically reorganizes the schedule when changes are made.",
+  "requestFramePermissions": []
+}
